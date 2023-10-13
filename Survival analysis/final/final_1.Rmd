@@ -1,0 +1,125 @@
+---
+output: pdf_document
+---
+
+## Q2
+
+```{r}
+library(survival)
+time = c(3,6,7,7,10,10,10,10,13,
+         14,15,15,19,19,20,20,22,22,
+         27,27,28,29,30,31,34,35,36,
+         37,38,39,39,39,39,40,42,43,
+         43,47,47,50,58,59,70,74,78)
+status = c(1,1,0,0,1,1,1,0,1,
+           1,1,0,1,1,0,1,1,1,
+           1,1,1,0,1,0,1,1,1,
+           1,1,1,1,1,1,1,1,1,
+           1,1,0,0,0,0,0,0,0)
+sur = Surv(time,status)
+KM <- survfit(sur ~ 1, type="kaplan-meier")
+summary(KM)
+```
+
+### a
+
+Calculate the estimate of the hazard probability at time t = 47.
+
+$\hat h_{47} = 1/8 = 0.125$
+
+### b
+
+$$\hat S(13) = (1-\hat h_3)(1-\hat h_6)(1-\hat h_{10})(1-\hat h_{13})$$
+
+$$ = (1-1/45)(1-1/44)(1-3/41)(1-1/37)=0.8617007$$
+
+The result is the same with the R calculation result (0.862).
+
+```{r}
+summary(KM,t = 13)
+```
+
+
+### c
+
+The 20% percentile of the distribution of the service times is the first observation where the estimated survival drops below 80%.
+
+```{r}
+unlist(quantile(KM,0.2))
+```
+
+
+In the R table, we can see this happens at 19. 
+Therefore $P(T\leq 19)=0.2$
+
+## Q3
+
+```{r}
+neph <- read.table("Neph.txt", header=TRUE, 
+                   colClasses = c("factor","factor","numeric","numeric"))
+```
+
+### a
+
+Estimate the median survival time and give a 95% confidence interval.
+
+```{r}
+sur = Surv(neph$time,neph$status)
+KM <- survfit(sur ~ 1, type="kaplan-meier")
+unlist(quantile(KM,0.5))
+```
+
+So the estimated median is 26 and the 95% confidence interval is (15,52)
+
+### b
+
+Perform a likelihood ratio test for an effect from the nephrectomy treatment when we
+control for the differences between the ages using a Cox PH model. Report a P value for
+the test.
+
+```{r}
+fit.liv <- coxph(Surv(time,status)~
+                   age+nephrectomy,data=neph)
+anova(fit.liv)
+```
+
+We control age by make the sequential order age first.
+
+So the p value for the likelihood ratio test is 0.01033 < 0.05.
+
+There is significant effect from the nephrectomy treatment.
+
+### c
+
+Repeat this test except use a model that is stratified on the age groups
+
+```{r}
+fit.liv <- coxph(Surv(time,status)~
+                   strata(age)+nephrectomy,data=neph)
+anova(fit.liv)
+```
+
+
+The p value for the likelihood ratio test is 0.0199 < 0.05.
+
+There is significant effect from the nephrectomy treatment.
+
+But the p value is bigger than the part b.
+
+### d
+
+Describe how the two models in (b) and (c) are different, and what factors you would
+consider when deciding which one is the correct test to use.
+
+The model in (b) is the cox proportion hazard model and treat age as a predictor, and the model in (c) is a stratified model which treat the age as a confounding variable that do not satisfy the proportional hazard assumption.
+
+If the age satisfies the proportional hazard assumption and we are interested in the effect in age, we should use the model in (b), because it can provide parametric estimation and confidence interval on age.
+
+If the age does not satisfy the proportional hazard assumption, or we are not interested in the effect of age, we should use the stratified model.
+
+
+
+
+
+
+

@@ -1,0 +1,283 @@
+---
+title: "SARIMA model analysis for monthly temperature"
+subtitle: "PSTAT 174 project"
+author: "Enze Zhang"
+date: "2022/12/1"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    theme: cerulean
+    code_download: true
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = FALSE,	error = FALSE,
+  message = FALSE,warning = FALSE
+)
+```
+
+# Summary
+
+In this research, I will apply time series approaches to real-world issues, including temperature forecasting. My research begins with exploratory analysis. With Box Cox transformation and required difference, I conform the data to the SARIMA model's variance stability and stationarity criteria. The second step is model selection. I first examine a sample ACF and PACF plot, then propose potential models based on the major delays, and then pick the model with the minimum AICc. The third section is diagnostic of the model. In this section, I examine the residual and evaluate whether its behavior is comparable to white noise. I then continue to do the predicting.
+
+\newpage
+
+# Data source and description
+
+In this project, I will use the tsdl R package's data. The data index is 155 of the frequency 12 data, and the data description is as follows:
+
+```{r}
+library(tsdl)
+library(forecast)
+library(car)
+library(tseries)
+library(ggplot2)
+library(MASS)
+data = subset(tsdl,12)[[155]]
+```
+
+
+```{r}
+attributes(data)
+```
+
+In a study by Hipel and McLeod (1994), this is the average monthly temperature from 1907 to 1972.  It began from 1907 Jan and conclude in 1972 Dec. In this project, I will utilize the previous four years as the test data and the remaining years to develop a SARIMA model that accurately predicts the last four years.
+
+# Exploratory analysis
+
+* Plot and examine the trend in average temperature
+
+```{r}
+train = ts(data[(1:(12*62))],frequency = 12,start = c(1907,1))
+test = data[-(1:(12*62))]
+autoplot(train,ylab = "Training data", xlab = "year") + ggtitle("Average temperature")
+```
+
+Based on this time series plot, I find that there is minimal mean change and yearly seasonality change. Consequently, the lag 12 difference seems necessary. But before calculating the lag 12 difference, I must first verify the Box-Cox transformation to satisfy the equal variance assumption.
+
+* Box-Cox transformation for equal variance assumption
+
+```{r}
+lambda = boxcox(train~1)
+optlam = lambda$x[which.max(lambda$y)]
+t_train1 = BoxCox(train,optlam)
+```
+
+In the 95% lambda of Box Cox transformation CI, 1 is not inside of it; hence, I must convert the data using the box cox transformation. Then, I plot the transformed data together with the transformed and 12 difference data:
+
+
+```{r}
+autoplot(t_train1,ylab = "Training data", xlab = "year") + ggtitle("Training data after box-cox")
+t_train2 = diff(t_train1,lag=12)
+autoplot(t_train2,ylab = "Training data", xlab = "year") + ggtitle("Training data after box-cox and lag 12 difference")
+```
+
+```{r}
+adf.test(t_train2)
+```
+
+
+The converted and differentiated data seem to be quite steady. Then, I evaluate stationarity using the Augmented Dickey-Fuller Test. The alternative hypothesis to the null hypothesis is that the series is stationary. The p value is less than 0.01, hence after the difference between lags 1 and 12, the series is now stationary. Therefore I may continue with SARIMA modeling.
+
+# Model selection
+
+First I need to decide the candidate models. Looking at the sample ACF and PACF plot of the transformed (Box cox transformed and differenced) data:
+
+```{r}
+ggtsdisplay(t_train2,lag.max = 60)
+```
+
+There are two elements of the time series model. The first section is non-seasonal. In the ACF plot, the first three lags are significant, but only the first and third lags are important in the PACF plot. As there is no lag 1 difference, I believe that the feasible ARIMA models are ARIMA(p,0,q), where $0\leq p,q\leq 3$.
+
+The second part is the seasonal part. Apparently, the ACF seems cut off at lag 1 (though some marginally sppikes afterward), and the PACF tails off, so the SAR part should be 0. So the most probable SARIMA part would be $SMA(1)_{12}$. I will also check $SMA(2)_{12}$, $SMA(3)_{12}$ and $SMA(4)_{12}$ for model selection as there are some spikes marginally significant.
+
+Now I calculate all of the candidate model's AICc and summary them in a chart. This procedure takes a long time to run.
+
+```{r}
+# model selection via AICc
+AICc = 10000
+arimalist = list(c(1,0,0),c(2,0,0),c(3,0,0),
+                 c(0,0,1),c(1,0,1),c(2,0,1),c(3,0,1),
+                 c(0,0,2),c(1,0,2),c(2,0,2),c(3,0,2),
+                 c(0,0,3),c(1,0,3),c(2,0,3),c(3,0,3))
+seasonallist = list(c(0,1,1),c(0,1,2),c(0,1,3),c(0,1,4))
+AICcs = matrix(0,length(arimalist),length(seasonallist))
+minimumindex = c()
+for(i in 1:length(arimalist)){
+  for(j in 1:length(seasonallist)){
+    fit = Arima(t_train1,order=arimalist[[i]],
+                    seasonal = seasonallist[[j]])
+    AICcs[i,j] = fit$aicc
+    if(fit$aicc < AICc){
+      AICc = fit$aicc
+      minimumindex = c(i,j)
+    }
+  }
+}
+
+```
+
+```{r}
+#AICc chart
+rownames(AICcs) = c("ARIMA(1,0,0)","ARIMA(2,0,0)","ARIMA(3,0,0)",
+                    "ARIMA(0,0,1)","ARIMA(1,0,1)","ARIMA(2,0,1)","ARIMA(3,0,1)",
+                    "ARIMA(0,0,2)","ARIMA(1,0,2)","ARIMA(2,0,2)","ARIMA(3,0,2)",
+                    "ARIMA(0,0,3)","ARIMA(1,0,3)","ARIMA(2,0,3)","ARIMA(3,0,3)")
+colnames(AICcs) = c("SMA(1)","SMA(2)","SMA(3)","SMA(4)")
+knitr::kable(AICcs, caption = "AICc table of the models")
+```
+
+So the model with the minimum AICc is the model $SARIMA(3,0,3)\times(0,1,2)_{12}$
+
+Here I fit the model as below. It seems that the ar3, ma3 terms are significant under 5\% level, but the sma2 term is not significant under 5\% level. But given that I also fit the model $SARIMA(3,0,3)\times(0,1,1)_{12}$ and it has a much worse AICc, so we will still use this model: $SARIMA(3,0,3)\times(0,1,2)_{12}$ other than $SARIMA(3,0,3)\times(0,1,1)_{12}$.
+
+Then I also check the model that fix AR2, MA2 as 0. I find the model $SARIMA(3,0,3)\times(0,1,2)_{12}$ that fix AR2 term as 0 has the lower AICc, so I will choose that model as the final model.
+
+```{r}
+# model fitting
+fit = Arima(t_train1,order=c(3,0,3),
+    seasonal = list(order=c(0,1,2),period=12))
+print("Original model")
+summary(fit)
+
+
+# Fix AR2 and MA2
+print("Fix AR2 and MA2")
+fit1 = Arima(t_train1,order=c(3,0,3),
+    seasonal = list(order=c(0,1,2),period=12), fixed = c(NA, 0, NA, NA, 0, 
+NA, NA, NA))
+summary(fit1)
+
+# Fix MA2
+print("Fix  MA2")
+fit2 = Arima(t_train1,order=c(3,0,3),
+    seasonal = list(order=c(0,1,2),period=12), fixed = c(NA, NA, NA, NA, 0, 
+NA, NA, NA))
+summary(fit2)
+
+# Fix AR2
+print("Fix AR2")
+fit3 = Arima(t_train1,order=c(3,0,3),
+    seasonal = list(order=c(0,1,2),period=12), fixed = c(NA, 0, NA, NA, NA, 
+NA, NA, NA))
+summary(fit3)
+```
+
+So the model after box cox transformation of $\lambda = 0.6666667$ is:
+
+\[
+(1+0.7093B-0.6669B^3)(1-B^{12})X_n=(1+0.8926B+0.2138B^2-0.5464B^3)(1-1.0435B^{12}+0.0603B^{24})Z_n
+\]
+
+$$ Z_n \overset{iid}\sim N[0,1.091]$$
+
+# Model diagnostic
+
+In this section, I will examine the model's residuals to see whether they resemble white noise.
+
+First, ensure that neither the sample ACF nor the sample PACF contain any significant spikes.
+
+```{r}
+residual = resid(fit3)
+ggtsdisplay(residual)
+```
+
+Then I check the residual about normality as below:
+
+```{r}
+# normality
+gghistogram(resid(fit3))
+qqnorm(resid(fit3))
+qqline(resid(fit3))
+shapiro.test(resid(fit3))
+```
+
+With the exception of a few outliers, the data seems to be relatively regular based on the histogram. From the QQ plot, with the exception of a few outliers, the data is almost on the line, and few tails are off, indicating a little fat tail, but it is not excessive. Therefore, while the Shapiro Wilks test is not passed, this is mostly due to outliers, and based on the histogram, I assume the majority of residuals behave properly.
+
+I then utilize portmanteau tests to examine the residual independence. The df for the first two tests are both $\sqrt{744}-7=20$, and the df for McLeod-Li test is 27.
+
+```{r}
+# independence tests
+df = data.frame(Tests = c("Box-Pierce","Ljung-Box","McLeod-Li"), p_value = 
+        c(Box.test(resid(fit), lag = 27, type = c("Box-Pierce"),fitdf = 7)$p.value,
+          Box.test(resid(fit), lag = 27, type = c("Ljung-Box"),fitdf = 7)$p.value,
+          Box.test(resid(fit)^2, lag = 27, type = c("Ljung-Box"),fitdf = 0)$p.value),
+        df = c(20,20,27))
+knitr::kable(df, caption = "P value for independence tests")
+```
+
+Based on the results in the table, I consider the series to be independent.
+
+I then examine the root. If the model is invertible and stationary, then all of the roots will exist outside the unit circle. After getting the roots, I use the abs function to determine whether the root is inside unit circle.
+
+* AR part
+
+```{r}
+polyroot(c(1,c(fit3$coef[1:3])))
+abs(polyroot(c(1,c(fit3$coef[1:3]))))
+```
+
+* MA part
+
+```{r}
+polyroot(c(1,c(fit3$coef[4:6])))
+abs(polyroot(c(1,c(fit3$coef[4:6]))))
+```
+
+Though the MA roots are very close to 1, they are bigger than 1.
+
+* SMA part
+
+```{r}
+polyroot(c(1,c(fit3$coef[7:8])))
+```
+
+Here we can see that the AR MA, SMA roots are outside the unit circle. So all of the MA roots and the AR roots are outside the unit circle, so the model is invertible and stationary.
+
+# Forecast
+
+First, I make a prediction based on my model, then I obtain the standard error, and finally I obtain the origin data scale prediction, upper bound, and lower bound using the inverse box cox transformation. For simplicity, I only plot the results from 1968 to 1973.
+
+```{r}
+# Forecast 
+pred = predict(fit3, n.ahead=length(test))$pred
+se = predict(fit3, n.ahead=length(test))$se
+predOrigin = exp(log(pred * optlam + 1)/optlam)
+predOriginlb = exp(log((pred-1.96*se) * optlam + 1)/optlam)
+predOriginub = exp(log((pred+1.96*se) * optlam + 1)/optlam)
+ts.plot(train, xlim = c(1968,1974),ylim = c(20,90), 
+        ylab = "Temperature", main = "Forecast temperature from 1968 to 1973")
+title(sub = "red predicted, blue true data, dashed line Confidence interval")
+points(1969+(1:length(test))/12,predOrigin,col = "red")
+lines(1969+(1:length(test))/12,predOriginlb,lty=2)
+lines(1969+(1:length(test))/12,predOriginub,lty=2)
+points(1969+(1:length(test))/12,test,col = "blue")
+lines(1969+(1:length(test))/12,test,col = "blue")
+```
+
+In the forecast plot, every true value falls within the confidence interval, indicating that my prediction is accurate. And the discrepancy between the predicted values and the actual observations is minimal. The forecast data indicates that the temperature will continue to follow the seasonal pattern in the years to come.
+
+# Conclusion
+
+In the first part of exploratory analysis. I use Box Cox transformation and lag 12 difference to make the data variance stability and stationary. Then I observe the sample ACF and PACF plot, proposing some candidate models by the significant lags, and then choose the best model is $SARIMA(3,0,3)\times(0,1,2)_{12}$ with the fixed AR2 term. The model after box cox transformation of $\lambda = 0.6666667$ is:
+
+\[
+(1+0.7093B-0.6669B^3)(1-B^{12})X_n=(1+0.8926B+0.2138B^2-0.5464B^3)(1-1.0435B^{12}+0.0603B^{24})Z_n
+\]
+
+$$ Z_n \overset{iid}\sim N[0,1.091]$$
+
+
+Then, I examine the residual ACF, PACF, independence, normality, and stationary and invertible model conditions. Except for a few outliers, the majority appear to be satisfactory. Then, in the forecast section, all test data fall within the 95\% confidence interval, and the forecast indicates a significant seasonal trend.
+
+# References
+
+1. tsdl R package
+2. 174 Slides and lecture notes.
+
+# *Appendix: Rcode*
+
+```{r, echo=TRUE, eval=FALSE, ref.label=knitr::all_labels()}
+```

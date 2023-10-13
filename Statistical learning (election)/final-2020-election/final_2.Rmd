@@ -1,0 +1,1155 @@
+---
+title: "2020 Election Analysis"
+author: Zhiyi Guo and Jianing Song
+output: 
+  html_document
+---
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE)
+```
+
+
+## Data
+
+We will essentially start the anlaysis with two data sets. The first one is the election data, which is drawn from here. The data contains county-level election results. Note that this is not the final election results, as recounting are still taking place in many states.
+
+The second dataset is the 2017 United States county-level census data, which is available here.
+
+The following code load in these two data sets: election.raw and census.
+
+```{r}
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(tree)
+library(maptree)
+library(glmnet)
+library(plotROC)
+library(class)
+library(randomForest)
+library(reshape2)
+## read data and convert candidate names and party names from string to factor
+election.raw <- read_csv("candidates_county.csv", col_names = TRUE) %>% 
+  mutate(candidate = as.factor(candidate), party = as.factor(party))
+
+## remove the word "County" from the county names
+words.to.remove = c("County")
+remove.words <- function(str, words.to.remove){
+  sapply(str, function(str){
+    x <- unlist(strsplit(str, " "))
+    x <- x[!x %in% words.to.remove]
+    return(paste(x, collapse = " "))
+  }, simplify = "array", USE.NAMES = FALSE)
+}
+election.raw$county <- remove.words(election.raw$county, words.to.remove)
+
+## read census data
+census <- read_csv("census_county.csv") 
+```
+
+
+## *Election data*
+
+1. Report the dimension of *election.raw*. 
+
+```{r}
+#1.dimension
+dim(election.raw)
+```
+
+The dimension of election.raw is 31167 rows and 5 columns.
+
+Are there missing values in the data set? 
+
+```{r}
+sum(is.na(election.raw))
+```
+
+So there is no missing values in the election.raw data set.
+
+Compute the total number of distinct values in state in *election.raw* to verify that the data contains all states and a federal district.
+
+```{r}
+length(unique(election.raw$state))
+```
+
+The data contains all states and a federal district Washington D.C.
+
+## *Census data*
+
+Following are the first few rows of the census data. The column names are all very self-explanatory.
+
+2. Report the dimension of census.
+
+```{r}
+dim(census)
+
+```
+
+Are there missing values in the data set?
+
+```{r}
+sum(is.na(census))
+
+```
+
+1 missing value.
+
+Compute the total number of distinct values in county in census. Compare the values of total number of distinct county in census with that in election.raw. Comment on your findings.
+
+```{r}
+length(unique(election.raw$county))
+length(unique(census$County))
+```
+
+The census data has fewer observations compared to the election.raw data.
+
+
+## *Data wrangling*
+
+3. Construct aggregated data sets from *election.raw* data: i.e.,
+
+* Keep the county-level data as it is in *election.raw.*
+
+* Create a state-level summary into a *election.state.*
+
+* Create a federal-level summary into a *election.total.*
+
+```{r}
+election.total = election.raw %>%
+   group_by(candidate,party) %>%
+   dplyr::summarise(votes = sum(votes))
+election.state = election.raw %>%
+   group_by(state,candidate,party) %>%
+   dplyr::summarise(votes = sum(votes))
+```
+
+4. How many named presidential candidates were there in the 2020 election? Draw a bar chart of all votes received by each candidate. You can split this into multiple plots or may prefer to plot the results on a log scale. Either way, the results should be clear and legible! (For fun: spot Kanye West among the presidential candidates!)
+
+There are total 38 presidential candidates in the 2020 election. Kanye West is among one of them.
+
+```{r,fig.height=6}
+
+df = arrange(election.total,votes)
+df$votes.log2 = log2(df$votes)
+
+p1 = ggplot(df[1:10,], aes(x = reorder(candidate, votes.log2, sum),
+    y = votes.log2)) +
+  geom_col() +
+  labs( x = "candidates",
+        title ="all votes received by each candidate",
+        y = "log2 of the total votes") +
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=15,face="bold"),
+        plot.title = element_text(size=17)) +
+  coord_flip()
+
+p2 = ggplot(df[11:20,], aes(x = reorder(candidate, votes.log2, sum),
+                            y = votes.log2)) +
+  geom_col() +
+  labs( x = "candidates",
+        title ="all votes received by each candidate",
+        y = "log2 of the total votes")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=15,face="bold"),
+        plot.title = element_text(size=17))+
+  coord_flip()
+p3 = ggplot(df[21:30,], aes(x = reorder(candidate, votes.log2, sum), y = votes.log2)) +
+  geom_col() +
+  labs( x = "candidates",
+        title ="all votes received by each candidate", 
+        y = "log2 of the total votes") +
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=15,face="bold"),
+        plot.title = element_text(size=17)) +
+  coord_flip()
+p4 = ggplot(df[31:38,],
+            aes(x = reorder(candidate, votes.log2, sum), y = votes.log2)) +
+  geom_col() + 
+  labs( x = "candidates",
+        title ="all votes received by each candidate",
+        y = "log2 of the total votes")+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=15,face="bold"),
+        plot.title = element_text(size=17))+ 
+  coord_flip()
+
+p4
+p3
+p2
+p1
+```
+
+5. Create data sets *county.winner* and *state.winner* by taking the candidate with the highest proportion of votes in both county level and state level. Hint: to create *county.winner*, start with election.raw, group by county, compute total votes, and pct = votes/total as the proportion of votes. Then choose the highest row using top_n (variable *state.winner* is similar).
+
+
+```{r}
+county_winner = election.raw %>% 
+  group_by(county) %>% 
+  mutate(total=sum(votes), pct=votes/total) %>%
+  top_n(1)
+
+state_winner = election.state %>% 
+  group_by(state) %>%
+  mutate(total=sum(votes), pct=votes/total) %>%
+  top_n(1)
+```
+
+## *Visualization*
+
+Visualization is crucial for gaining insight and intuition during data mining. We will map our data onto maps.
+
+The R package *ggplot2* can be used to draw maps. Consider the following code.
+
+```{r}
+states <- map_data("state")
+
+ggplot(data = states) + 
+  geom_polygon(aes(x = long, y = lat, fill = region, group = group),
+               color = "white") + 
+  coord_fixed(1.3) +
+  guides(fill=FALSE)  # color legend is unnecessary and takes too long
+```
+
+The variable states contain information to draw white polygons, and fill-colors are determined by region.
+
+
+6. Use similar code to above to draw county-level map by creating counties = map_data("county"). Color by county.
+
+```{r}
+counties = map_data("county")
+ggplot(data = counties) + 
+  geom_polygon(aes(x = long, y = lat, 
+   fill = subregion, group = group), color = "white") +
+  coord_fixed(1.3) + 
+  guides(fill= FALSE)
+```
+
+7. Now color the map by the winning candidate for each state. First, combine states variable and state.winner we created earlier using left_join(). Note that left_join() needs to match up values of states to join the tables. A call to left_join() takes all the values from the first table and looks for matches in the second table. If it finds a match, it adds the data from the second table; if not, it adds missing values:
+
+Here, we’ll be combing the two data sets based on state name. However, the state names in states and state.winner can be in different formats: check them! Before using left_join(), use certain transform to make sure the state names in the two data sets: states (for map drawing) and state.winner (for coloring) are in the same formats. Then left_join(). Your figure will look similar to New York Times map.
+
+
+
+```{r}
+states = states %>%
+  mutate(state=
+    state.name[match(states$region,
+    tolower(state.name))])
+
+
+ggplot(data = left_join(states, state_winner,
+    by="state")) + 
+  geom_polygon(aes(x = long, y = lat, 
+        fill = candidate, group = group),
+        color = "white") + 
+  scale_fill_manual(values=c("red", "blue"))+
+  coord_fixed(1.3) + 
+  guides(fill= FALSE)
+
+```
+
+The red states are the states Trump wins, and the blue states are the states Biden wins.
+
+8. Color the map of the state of California by the winning candidate for each county. Note that some county have not finished counting the votes, and thus do not have a winner. Leave these counties uncolored.
+
+```{r}
+counties <- map_data("county")
+ca_county <- subset(counties, region == "california")
+ca_county$county = ca_county$subregion
+county_winner$county = tolower(county_winner$county)
+
+ggplot(data = left_join(ca_county, 
+  county_winner, by = "county")) + 
+  geom_polygon(aes(x = long, y = lat, 
+        fill = candidate, group = group),
+        color = "white") + 
+  scale_fill_manual(values=c("red", "blue"))+
+  coord_fixed(1.3) + 
+  guides(fill= FALSE)
+```
+
+9. (Open-ended) Create a visualization of your choice using census data. Many exit polls noted that demographics played a big role in the election. Use this Washington Post article and this R graph gallery for ideas and inspiration.
+
+```{r}
+census.clean = na.omit(census) %>% mutate(Men = Men/TotalPop*100, 
+  Employed = Employed/TotalPop*100, 
+  VotingAgeCitizen = VotingAgeCitizen/TotalPop*100, 
+  Minority = Hispanic+Black+Native+Asian+Pacific) %>% 
+  select(-Women, -Hispanic, -Native,
+         -Black, -Asian, -Pacific, -Construction,
+         -Walk, -PublicWork,-IncomePerCapErr,
+         -IncomeErr, -IncomePerCap)
+
+census.clean$county = tolower(census.clean$County)
+county_winner$county = paste0(tolower(county_winner$county)," county")
+```
+
+
+```{r}
+library(ggridges)
+library(ggplot2)
+library(viridis)
+library(hrbrthemes)
+
+
+
+df = left_join(census.clean, county_winner, by = "county")%>%
+  filter(candidate == "Joe Biden" | candidate == "Donald Trump")%>%
+  group_by(candidate)
+df$candidate = droplevels(df$candidate)
+
+# Plot
+ggplot(df, aes(x = White, y = candidate, fill = ..x..)) +
+  geom_density_ridges_gradient(scale =2, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "White", option = "C") +
+  labs(title = 'White people %') +
+  theme_ipsum() +
+    theme(
+      legend.position="none",
+      panel.spacing = unit(0.1, "lines"),
+      strip.text.x = element_text(size = 8)
+    )
+```
+
+From this ridge plot, in the counties with more minorities, Joe Biden is more favored than Trump. 
+
+```{r}
+# Plot
+ggplot(df, aes(x = log(TotalPop), y = candidate, fill = ..x..)) +
+  geom_density_ridges_gradient(scale =2, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "TotalPop", option = "C") +
+  labs(title = 'Total Population in loogarithm') +
+  theme_ipsum() +
+    theme(
+      legend.position="none",
+      panel.spacing = unit(0.1, "lines"),
+      strip.text.x = element_text(size = 8)
+    )
+```
+
+From this ridge plot, Joe Biden is more favored in the big cities with more population.
+
+```{r}
+# Plot
+ggplot(df, aes(x = Professional, y = candidate, fill = ..x..)) +
+  geom_density_ridges_gradient(scale =2, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "Professional", option = "C") +
+  labs(title = 'Professional') +
+  theme_ipsum() +
+    theme(
+      legend.position="none",
+      panel.spacing = unit(0.1, "lines"),
+      strip.text.x = element_text(size = 8)
+    )
+```
+
+From this ridge plot, Joe Biden is more favored in the counties where there are more professional workers (lawyers, professors, doctors, etc).
+
+10. The census data contains county-level census information. In this problem, we clean and aggregate the information as follows.
+
+* Clean county-level census data census.clean: start with census, filter out any rows with missing values, convert {Men, Employed, VotingAgeCitizen} attributes to percentages, compute Minority attribute by combining {Hispanic, Black, Native, Asian, Pacific}, remove these variables after creating Minority, remove {IncomeErr, IncomePerCap, IncomePerCapErr, Walk, PublicWork, Construction}. Many columns are perfectly colineared, in which case one column should be deleted.
+
+```{r}
+census.clean = na.omit(census) %>% 
+  mutate(Men = Men/TotalPop*100, 
+  Employed = Employed/TotalPop*100, 
+  VotingAgeCitizen = VotingAgeCitizen/TotalPop*100, 
+  Minority = Hispanic+Black+Native+Asian+Pacific) %>% 
+  select(-Women, -Hispanic, -Native,
+         -Black, -Asian, -Pacific, -Construction,
+         -Walk, -PublicWork,-IncomePerCapErr,
+         -IncomeErr, -IncomePerCap)
+```
+
+* Print the first 5 rows of census.clean:
+
+```{r}
+head(census.clean,5)
+```
+
+
+##  *Dimensionality reduction*
+
+11. Run PCA for the cleaned county level census data (with State and County excluded). Save the first two principle components PC1 and PC2 into a two-column data frame, call it pc.county. Discuss whether you chose to center and scale the features before running PCA and the reasons for your choice. 
+
+Center and scale are needed on the data before running PCA, because different columns has different mean and variation, some column such as population is very dispersed.
+
+```{r}
+pc.county = prcomp(census.clean[4:26], scale=TRUE, center = TRUE)
+ct.pc = data.frame(pc.county$rotation[,1:2],
+    features = rownames(pc.county$rotation))
+```
+
+What are the three features with the largest absolute values of the first principal component? 
+
+
+```{r}
+knitr::kable(ct.pc %>% top_n(3,abs(PC1)),caption = "Top 3 features of PC1")
+```
+
+Which features have opposite signs and what does that mean about the correlation between these features?
+
+Employed has a negative sign to Poverty and ChildPoverty, they have a negative correlation.
+
+12. Determine the number of minimum number of PCs needed to capture 90% of the variance for the analysis. Plot proportion of variance explained (PVE) and cumulative PVE.
+
+```{r}
+pc.var=(pc.county$sdev)^2
+pve = pc.var/sum(pc.var)
+cumulative_pve = cumsum(pve)
+par(mfrow=c(1, 2))
+plot(pve, type="l", lwd=3)
+plot(cumulative_pve, type="l", lwd=3)
+```
+
+We need 13 PCs to capture 90% of the variance in our case.
+
+## *Clustering*
+
+13. With census.clean (with State and County excluded), perform hierarchical clustering with complete linkage. Cut the tree to partition the observations into 10 clusters. 
+
+```{r}
+census.cluster = hclust(dist(scale(census.clean[4:26]), method="euclidean"), method="complete")
+census.cluster.res = cutree(census.cluster, k=10)
+knitr::kable(t(table(census.cluster.res)),caption = "cluster results")
+```
+
+Re-run the hierarchical clustering algorithm using the first 2 principal components from pc.county as inputs instead of the original features. 
+
+```{r}
+census.cluster.pca = hclust(dist(scale(pc.county$x[,1:2]), method="euclidean"), method="complete")
+census.cluster.pca.res = cutree(census.cluster.pca, k=10)
+knitr::kable(t(table(census.cluster.pca.res)),caption = "cluster results on pca")
+```
+
+Compare the results and comment on your observations. For both approaches investigate the cluster that contains Santa Barbara County. Which approach seemed to put Santa Barbara County in a more appropriate clusters? Comment on what you observe and discuss possible explanations for these observations.
+
+When the cluster is used on the original data, the dimension of the cluster that Santa Barbara is in is:
+
+```{r}
+t1 = census.cluster.res[which(census$County == "Santa Barbara County")]
+t2 = census.cluster.pca.res[which(census$County == "Santa Barbara County")]
+cluster1 = census %>% drop_na() %>% mutate(Cluster=census.cluster.res) %>% filter(Cluster == t1)
+dim(cluster1)[1]
+```
+
+The Santa Barbara is in the biggest cluster.
+
+When the cluster is used on the PCA components, the dimension of the cluster that Santa Barbara is in is:
+
+```{r}
+cluster2 = census %>% drop_na() %>% mutate(Cluster=census.cluster.pca.res) %>% filter(Cluster == t2)
+dim(cluster2)[1]
+```
+
+It is in a cluster with only 163 counties. So the cluster method using the PCA is better than not using PCA. Because the cluster result is more subtle.
+
+## *Classification*
+
+We start considering supervised learning tasks now. The most interesting/important question to ask is: can we use census information in a county to predict the winner in that county?
+
+In order to build classification models, we first need to combine county.winner and census.clean data. This seemingly straightforward task is harder than it sounds. For simplicity, the following code makes necessary changes to merge them into election.cl for classification.
+
+```{r}
+county_winner = election.raw %>% 
+  group_by(county) %>% 
+  mutate(total=sum(votes), pct=votes/total) %>%
+  top_n(1)
+
+state_winner = election.state %>% 
+  group_by(state) %>%
+  mutate(total=sum(votes), pct=votes/total) %>%
+  top_n(1)
+# we move all state and county names into lower-case
+county.winner = county_winner
+tmpwinner <- county.winner %>% ungroup %>%
+  mutate_at(vars(state, county), tolower)
+
+# we move all state and county names into lower-case
+# we further remove suffixes of "county" and "parish"
+tmpcensus <- census.clean %>% mutate_at(vars(State, County), tolower) %>%
+  mutate(County = gsub(" county|  parish", "", County)) 
+
+# we join the two datasets
+election.cl <- tmpwinner %>%
+  left_join(tmpcensus, by = c("state"="State", "county"="County")) %>% 
+  na.omit
+
+# drop levels of county winners if you haven't done so in previous parts
+election.cl$candidate <- droplevels(election.cl$candidate)
+
+## save meta information
+election.meta <- election.cl %>% select(c(county, party, CountyId, state, votes, pct, total))
+
+## save predictors and class labels
+election.cl = election.cl %>% select(-c(county, party, CountyId, state, votes, pct, total))
+
+```
+
+14. Understand the code above. Why do we need to exclude the predictor party from election.cl?
+
+Joe Biden is Democracy, Donald Trump is Republic. The predictor party is actually the same with the candidate.
+
+
+* Using the following code, partition data into 80% training and 20% testing:
+
+```{r}
+set.seed(10) 
+n <- nrow(election.cl)
+idx.tr <- sample.int(n, 0.8*n) 
+election.tr <- election.cl[idx.tr, ]
+election.te <- election.cl[-idx.tr, ]
+```
+
+Use the following code to define 10 cross-validation folds:
+
+```{r}
+set.seed(20) 
+nfold <- 10
+folds <- sample(cut(1:nrow(election.tr), breaks=nfold, labels=FALSE))
+```
+
+
+Using the following error rate function. And the object records is used to record the classification performance of each method in the subsequent problems.
+
+```{r}
+calc_error_rate = function(predicted.value, true.value){
+return(mean(true.value!=predicted.value))
+}
+records = matrix(NA, nrow=6, ncol=2)
+colnames(records) = c("train.error","test.error")
+rownames(records) = c("tree","logistic","lasso","KNN","SVM","Random Forest")
+
+#get the X and Y
+train.X = election.tr %>% select(-candidate)
+train.Y = election.tr %>% select(candidate)
+test.X = election.te %>% select(-candidate)
+test.Y = election.te %>% select(candidate)
+```
+
+## *Decision tree*
+
+15. Decision tree: train a decision tree by cv.tree(). Prune tree to minimize misclassification error. Be sure to use the folds from above for cross-validation. 
+
+```{r}
+tree.all = tree(candidate~.,election.tr)
+cvtree = cv.tree(tree.all, rand=folds, 
+                 FUN=prune.misclass)
+
+best.cv = min(cvtree$size[which(cvtree$dev==min(cvtree$dev))])
+
+plot(cvtree$size , cvtree$dev, type="b",
+xlab = "Number of leaves, \'best\'", ylab = "CV Misclassification Error",
+col = "red", main="CV")
+abline(v=best.cv, lty=2)
+```
+
+Visualize the trees before and after pruning. 
+
+```{r, fig.height=7}
+draw.tree(tree.all, nodeinfo=TRUE, cex = 0.7)
+title("decision tree (unpruned) on training set", cex = 0.7)
+
+prune.tree = prune.misclass(tree.all, best=best.cv)
+# Plot pruned tree
+draw.tree(prune.tree, nodeinfo=TRUE, cex = 0.9)
+title("pruned tree on training set")
+```
+
+Save training and test errors to records object. Interpret and discuss the results of the decision tree analysis. Use this plot to tell a story about voting behavior.
+
+```{r}
+
+train.error.tree = 
+  calc_error_rate(predict(prune.tree, train.X, type="class"),
+                  train.Y$candidate)
+
+test.error.tree = 
+  calc_error_rate(predict(prune.tree, test.X, type="class"), 
+                  test.Y$candidate)
+records[1,1] = train.error.tree
+records[1,2] = test.error.tree
+```
+
+
+The first variable separated in the cutted tree is transit, which may refers to whether the county is in cities or rural part. It shows that Trump is more favored in the county where the transit distance is far.
+
+Also Trump is more favored in the county with more whites.
+
+## *Logistic regression* 
+
+16. Run a logistic regression to predict the winning candidate in each county. Save training and test errors to records variable. 
+
+```{r}
+glm.fit = glm(candidate~., data = election.tr, family = binomial)
+summary(glm.fit)
+logistic.train.prob = predict(glm.fit, train.X, type="response")
+logistic.train.pred = rep("Donald Trump",
+  length(train.Y$candidate))
+logistic.train.pred[logistic.train.prob > 0.5]="Joe Biden"
+
+train.error.logistic =
+  calc_error_rate(logistic.train.pred, train.Y$candidate)
+logistic.test.prob = predict(glm.fit, test.X, type="response")
+logistic.test.pred = rep("Donald Trump", 
+  length(test.Y$candidate))
+logistic.test.pred[logistic.test.prob > 0.5]="Joe Biden"
+test.error.logistic = calc_error_rate(logistic.test.pred, test.Y$candidate)
+records[2,1] = train.error.logistic
+records[2,2] = test.error.logistic
+
+```
+
+What are the significant variables? 
+
+Significant variables are TotalPop, White, VotingAgeCitizen, Professional, Service, Office, Production, Drive, Carpool, Employed, PrivateWork, Unemployment. 
+
+Are they consistent with what you saw in decision tree analysis? Interpret the meaning of a couple of the significant coefficients in terms of a unit change in the variables.
+
+The total population and white is consistent with the decision tree. Transit is not significant in the logistic regression model.
+
+Professional: 0.313, odd ratio $exp(0.313)=1.3675$. 
+
+1 unit increase of the Professional rate will multiply the ratio of probability Biden/Trump by 1.3675.
+
+Drive: -0.2175, odd ratio $exp(-0.2175)=0.805$. 
+
+1 unit increase of the Drive will multiply the ratio of Biden/Trump by 0.805
+
+17. You may notice that you get a warning glm.fit: fitted probabilities numerically 0 or 1 occurred. As we discussed in class, this is an indication that we have perfect separation (some linear combination of variables perfectly predicts the winner).
+This is usually a sign that we are overfitting. One way to control overfitting in logistic regression is through regularization.
+
+Use the cv.glmnet function from the glmnet library to run a 10-fold cross validation and select the best regularization parameter for the logistic regression with LASSO penalty. Set lambda = seq(1, 50) * 1e-4 in cv.glmnet() function to set pre-defined candidate values for the tuning parameter.
+
+```{r}
+lasso.fit <- 
+  cv.glmnet(x = as.matrix(train.X),
+            y = droplevels(train.Y$candidate),
+            type.measure="auc",
+            family = "binomial",alpha = 1, 
+            lambda = seq(1, 50) * 1e-4, foldid = folds)
+```
+
+What is the optimal value of lambda in cross validation?
+
+The optimal value of lambda in cross validation is `r knitr::combine_words( lasso.fit$lambda.min )`.
+
+
+What are the non-zero coefficients in the LASSO regression for the optimal value of lambda? 
+
+```{r}
+res = as.matrix(coef.relaxed(lasso.fit$glmnet.fit))[,43]
+res
+```
+
+Only ChildPoverty, Minority are forced to be 0.
+
+How do they compare to the unpenalized logistic regression? 
+
+```{r}
+print("The difference")
+res-glm.fit$coefficients
+```
+
+Save training and test errors to the records variable.
+
+```{r}
+invlogit = function(t){
+  return(exp(t)/(1+exp(t)))
+}
+
+X = as.matrix(train.X)
+X = cbind(rep(1,length(X[,1])),X)
+
+lasso.train.prob = sapply(X %*% res, invlogit)
+lasso.train.pred = rep("Donald Trump", length(train.Y$candidate))
+
+lasso.train.pred[lasso.train.prob > 0.5]="Joe Biden"
+train.error.lasso = calc_error_rate(lasso.train.pred, train.Y$candidate)
+
+
+X = as.matrix(test.X)
+X = cbind(rep(1,length(X[,1])),X)
+lasso.test.prob = sapply(X %*% res, invlogit)
+lasso.test.pred = rep("Donald Trump", length(test.Y$candidate))
+lasso.test.pred[lasso.test.prob > 0.5]="Joe Biden"
+test.error.lasso = calc_error_rate(lasso.test.pred, test.Y$candidate)
+
+records[3,1] = train.error.lasso
+records[3,2] = test.error.lasso
+```
+
+18. Compute ROC curves for the decision tree, logistic regression and LASSO logistic regression using predictions on the test data. Display them on the same plot. Based on your classification results, discuss the pros and cons of the various methods. Are the different classifiers more appropriate for answering different kinds of questions about the election?
+
+
+```{r}
+df = 
+  data.frame(prediction.tree = predict(prune.tree, test.X, type="vector")[,2], 
+             prediction.logistic = logistic.test.prob,
+             prediction.Lasso = lasso.test.prob, 
+             labels = droplevels(test.Y$candidate))
+
+ggplot(df,aes(d = labels))+ 
+  geom_roc(aes(m = prediction.tree,d = labels,color = "blue"),n.cuts=30,labels=FALSE,linealpha=0.7) + 
+  geom_roc(aes(m = prediction.logistic,d = labels,color = "green"),n.cuts=30,labels=FALSE,linealpha=0.5)+
+  geom_roc(aes(m = prediction.Lasso,d = labels,color = "red"),n.cuts=30,labels=FALSE,linealpha=0.5) +
+  ggtitle("ROC curves") + scale_colour_manual(
+  values = c("blue","green","red"),
+  labels = c("Tree","logistic", "Lasso")
+)
+
+```
+
+The logistic regression and the lasso logistic regression had similar performance in the ROC curve. The tree method had a much worse performance compared to the other two, because it's a non-parametric method and the probability calculation is not as precise as the regression method. Overall, the prediction performance is not as bad as the ROC curve compared to the regression methods.
+
+## *Taking it further*
+
+19. Explore additional classification methods. Consider applying additional two classification methods from KNN, LDA, QDA, SVM, random forest, boosting, neural networks etc. (You may research and use methods beyond those covered in this course). How do these compare to the tree method, logistic regression, and the lasso logistic regression?
+
+### KNN
+
+Here we use 10 fold Cross validation to decide the best K for the KNN method.
+
+```{r}
+# do.chunk() for k-fold Cross-validation
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, ...){ 
+  # Function arguments
+  
+  train = (folddef!=chunkid) # Get training index
+  
+  Xtr = Xdat[train,] # Get training set by the above index
+  Ytr = Ydat[train] # Get true labels in training set
+  Xvl = Xdat[!train,] # Get validation set
+  Yvl = Ydat[!train] # Get true labels in validation set
+  
+  predYtr = knn(train=Xtr, test=Xtr, cl=Ytr, ...) # Predict training labels
+  predYvl = knn(train=Xtr, test=Xvl, cl=Ytr, ...) # Predict validation labels
+  
+  data.frame(fold = chunkid, # k folds
+  train.error = mean(predYtr != Ytr), # Training error for each fold
+  val.error = mean(predYvl != Yvl)) # Validation error for each fold
+}
+
+# Set error.folds (a vector) to save validation errors in future
+error.folds = NULL
+# Give possible number of nearest neighbours to be considered
+allK = c(1:15,seq(16,100,4))
+# Set seed since do.chunk() contains a random component induced by knn()
+set.seed(888)
+# Loop through different number of neighbors
+for (j in allK){
+tmp = plyr::ldply(1:nfold, do.chunk, # Apply do.chunk() function to each fold
+folddef=folds, Xdat=train.X, Ydat=train.Y$candidate, k=j)
+# Necessary arguments to be passed into do.chunk
+tmp$neighbors = j # Keep track of each value of neighors
+error.folds = rbind(error.folds, tmp) # combine results
+}
+
+
+# Transform the format of error.folds for further convenience
+errors = melt(error.folds, id.vars=c('fold', 'neighbors'), value.name='error')
+# Choose the number of neighbors which minimizes validation error
+
+val.error.means = errors %>%
+  # Select all rows of validation errors
+  filter(variable=='val.error') %>%
+  # Group the selected data frame by neighbors
+  group_by(neighbors, variable) %>%
+  # Calculate CV error rate for each k
+  summarise_each(funs(mean), error) %>%
+  # Remove existing group
+  ungroup() 
+```
+
+```{r}
+min.error <- val.error.means %>%
+  filter(error==min(error))
+bestk <- max(min.error$neighbors)
+# calculating training errors at each k
+# (by taking mean of each cv result)
+
+train.error.means <- errors %>%
+  filter(variable=="train.error") %>%
+  group_by(neighbors) %>%
+  summarise_at(vars(error),funs(mean))
+
+# plotting
+ggplot(train.error.means) +
+  geom_line(aes(neighbors,error,color="Train")) +
+  geom_line(data  = val.error.means,
+            aes(neighbors,error,color="Validation")) +
+  ggtitle("Error vs Number of Neighbors")
+
+# training errors
+pred.knn.train <- knn(train=train.X, test=train.X, cl=train.Y$candidate, k=bestk)
+train.error <- calc_error_rate(pred.knn.train, train.Y$candidate)
+# test errors
+pred.knn.test <- knn(train=train.X, test=test.X, cl=train.Y$candidate, k=bestk)
+test.error <- calc_error_rate(pred.knn.test, test.Y$candidate)
+# adding to records
+records[4,1] <- train.error
+records[4,2] <- test.error
+```
+
+From the result the best knn parameter is near 48.
+
+### SVM
+
+Here we fit svm on the test dataset for polynomial kernel and radial kernel. The first table is the confusion table of the radial kernel on the test data and the second table is the polynomial kernel on the test data. 
+
+```{r}
+library(e1071)
+svmfit = svm(candidate ~ .,data = election.tr,kernel ="radial",cost = 1)
+svmfit2 = svm(candidate ~ .,data = election.tr,kernel ="polynomial",cost = 1)
+svmpred = predict(svmfit,newdata =test.X)
+table(data = test.Y$candidate,svmpred)
+
+svmpred2 = predict(svmfit2,newdata =test.X)
+table(data = test.Y$candidate,svmpred2)
+```
+
+We should use the radial kernel. The error rate is calculated as:
+
+```{r}
+# training errors
+pred.svm.train <-  predict(svmfit,newdata =train.X)
+train.error <- calc_error_rate(pred.svm.train, train.Y$candidate)
+# test errors
+pred.svm.test <- predict(svmfit,newdata =test.X)
+test.error <- calc_error_rate(pred.svm.test, test.Y$candidate)
+# adding to records
+records[5,1] <- train.error
+records[5,2] <- test.error
+```
+
+### Random forest
+
+```{r}
+rf.fit <- randomForest(formula =
+  droplevels(as.factor(candidate)) ~.,data = election.tr)
+
+```
+
+```{r}
+# training errors
+forest.predict.train <- predict(rf.fit, train.X)
+label = droplevels(train.Y$candidate)
+train.error <- calc_error_rate(forest.predict.train, label)
+# test errors
+forest.predict.test <- predict(rf.fit, test.X)
+test.error <- calc_error_rate(forest.predict.test, label)
+records[6,1] <- train.error
+records[6,2] <- test.error
+```
+
+Now compare those 6 method performance on the train error and the test error:
+
+```{r}
+records
+```
+
+Among all of the methods, the SVM has the smallest train error and a second small test error, so it's the best.
+
+The Lasso method has the least test error. The KNN method is much worse than the others except random forest. The random Forest method is clearly overfit.
+
+##20. Tackle at least one more interesting question. 
+
+Here we want to use principal components to create new (and lower dimensional) set of features with which to train a classification model. This sometimes improves classification performance. Compare classifiers trained on the original features with those trained on PCA features.
+
+We will use only 5 PCs to fit those models.
+
+```{r}
+election.pca.fit = election.cl %>% 
+  select(-c(candidate)) %>%
+  prcomp(scale=TRUE, center = TRUE)
+election.pca.df = data.frame(election.pca.fit$x[,1:5])
+
+# We will use only 5 PCs to fit those models.
+
+election.pca.df$candidate = election.cl$candidate
+
+election.pca.tr<- election.pca.df[idx.tr, ]
+election.pca.te <- election.pca.df[-idx.tr, ]
+
+train.X = election.pca.tr %>% select(-candidate)
+train.Y = election.pca.tr %>% select(candidate)
+test.X = election.pca.te %>% select(-candidate)
+test.Y = election.pca.te %>% select(candidate)
+
+record.pca = matrix(NA, nrow=6, ncol=2)
+colnames(record.pca) = c("train.error","test.error")
+rownames(record.pca) = c("tree","logistic","lasso","KNN","SVM","Random Forest")
+```
+
+* Decision tree on PCA
+```{r}
+tree.all = tree(candidate~.,election.pca.tr)
+cvtree = cv.tree(tree.all, rand=folds, 
+                 FUN=prune.misclass)
+
+best.cv = min(cvtree$size[which(cvtree$dev==min(cvtree$dev))])
+
+plot(cvtree$size , cvtree$dev, type="b",
+xlab = "Number of leaves, \'best\'", ylab = "CV Misclassification Error",
+col = "red", main="CV")
+abline(v=best.cv, lty=2)
+```
+
+Visualize the trees before and after pruning. 
+
+```{r, fig.height=7}
+draw.tree(tree.all, nodeinfo=TRUE, cex = 0.7)
+title("decision tree (unpruned) on training set", cex = 0.7)
+
+prune.tree = prune.misclass(tree.all, best=best.cv)
+# Plot pruned tree
+draw.tree(prune.tree, nodeinfo=TRUE, cex = 0.9)
+title("pruned tree on training set")
+```
+
+```{r}
+
+train.error.tree = 
+  calc_error_rate(predict(prune.tree, train.X, type="class"),
+                  train.Y$candidate)
+
+test.error.tree = 
+  calc_error_rate(predict(prune.tree, test.X, type="class"), 
+                  test.Y$candidate)
+record.pca[1,1] = train.error.tree
+record.pca[1,2] = test.error.tree
+```
+
+* Logistic and Lasso on PCA
+
+```{r}
+glm.fit = glm(candidate~., data = election.pca.tr, family = binomial)
+summary(glm.fit)
+logistic.train.prob = predict(glm.fit, train.X, type="response")
+logistic.train.pred = rep("Donald Trump",
+  length(train.Y$candidate))
+logistic.train.pred[logistic.train.prob > 0.5]="Joe Biden"
+
+train.error.logistic =
+  calc_error_rate(logistic.train.pred, train.Y$candidate)
+logistic.test.prob = predict(glm.fit, test.X, type="response")
+logistic.test.pred = rep("Donald Trump", 
+  length(test.Y$candidate))
+logistic.test.pred[logistic.test.prob > 0.5]="Joe Biden"
+test.error.logistic = calc_error_rate(logistic.test.pred, test.Y$candidate)
+record.pca[2,1] = train.error.logistic
+record.pca[2,2] = test.error.logistic
+
+```
+
+```{r}
+lasso.fit <- 
+  cv.glmnet(x = as.matrix(train.X),
+            y = droplevels(train.Y$candidate),
+            type.measure="auc",
+            family = "binomial",alpha = 1, 
+            lambda = seq(1, 100) * 1e-4, foldid = folds)
+
+res = as.matrix(coef.relaxed(lasso.fit$glmnet.fit))[,43]
+
+invlogit = function(t){
+  return(exp(t)/(1+exp(t)))
+}
+
+X = as.matrix(train.X)
+X = cbind(rep(1,length(X[,1])),X)
+
+lasso.train.prob = sapply(X %*% res, invlogit)
+lasso.train.pred = rep("Donald Trump", length(train.Y$candidate))
+
+lasso.train.pred[lasso.train.prob > 0.5]="Joe Biden"
+train.error.lasso = calc_error_rate(lasso.train.pred, train.Y$candidate)
+
+
+X = as.matrix(test.X)
+X = cbind(rep(1,length(X[,1])),X)
+lasso.test.prob = sapply(X %*% res, invlogit)
+lasso.test.pred = rep("Donald Trump", length(test.Y$candidate))
+lasso.test.pred[lasso.test.prob > 0.5]="Joe Biden"
+test.error.lasso = calc_error_rate(lasso.test.pred, test.Y$candidate)
+
+record.pca[3,1] = train.error.lasso
+record.pca[3,2] = test.error.lasso
+```
+
+* KNN on PCA
+
+Here we use 10 fold Cross validation to decide the best K for the KNN method.
+
+```{r}
+# do.chunk() for k-fold Cross-validation
+do.chunk <- function(chunkid, folddef, Xdat, Ydat, ...){ 
+  # Function arguments
+  
+  train = (folddef!=chunkid) # Get training index
+  
+  Xtr = Xdat[train,] # Get training set by the above index
+  Ytr = Ydat[train] # Get true labels in training set
+  Xvl = Xdat[!train,] # Get validation set
+  Yvl = Ydat[!train] # Get true labels in validation set
+  
+  predYtr = knn(train=Xtr, test=Xtr, cl=Ytr, ...) # Predict training labels
+  predYvl = knn(train=Xtr, test=Xvl, cl=Ytr, ...) # Predict validation labels
+  
+  data.frame(fold = chunkid, # k folds
+  train.error = mean(predYtr != Ytr), # Training error for each fold
+  val.error = mean(predYvl != Yvl)) # Validation error for each fold
+}
+
+# Set error.folds (a vector) to save validation errors in future
+error.folds = NULL
+# Give possible number of nearest neighbours to be considered
+allK = c(1:25,seq(28,100,4))
+# Set seed since do.chunk() contains a random component induced by knn()
+set.seed(88811)
+# Loop through different number of neighbors
+for (j in allK){
+tmp = plyr::ldply(1:nfold, do.chunk, # Apply do.chunk() function to each fold
+folddef=folds, Xdat=train.X, Ydat=train.Y$candidate, k=j)
+# Necessary arguments to be passed into do.chunk
+tmp$neighbors = j # Keep track of each value of neighors
+error.folds = rbind(error.folds, tmp) # combine results
+}
+
+
+# Transform the format of error.folds for further convenience
+errors = melt(error.folds, id.vars=c('fold', 'neighbors'), value.name='error')
+# Choose the number of neighbors which minimizes validation error
+
+val.error.means = errors %>%
+  # Select all rows of validation errors
+  filter(variable=='val.error') %>%
+  # Group the selected data frame by neighbors
+  group_by(neighbors, variable) %>%
+  # Calculate CV error rate for each k
+  summarise_each(funs(mean), error) %>%
+  # Remove existing group
+  ungroup() 
+```
+
+```{r}
+min.error <- val.error.means %>%
+  filter(error==min(error))
+bestk <- max(min.error$neighbors)
+# calculating training errors at each k
+# (by taking mean of each cv result)
+
+train.error.means <- errors %>%
+  filter(variable=="train.error") %>%
+  group_by(neighbors) %>%
+  summarise_at(vars(error),funs(mean))
+
+# plotting
+ggplot(train.error.means) +
+  geom_line(aes(neighbors,error,color="Train")) +
+  geom_line(data  = val.error.means,
+            aes(neighbors,error,color="Validation")) +
+  ggtitle("Error vs Number of Neighbors")
+
+# training errors
+pred.knn.train <- knn(train=train.X, test=train.X, cl=train.Y$candidate, k=bestk)
+train.error <- calc_error_rate(pred.knn.train, train.Y$candidate)
+# test errors
+pred.knn.test <- knn(train=train.X, test=test.X, cl=train.Y$candidate, k=bestk)
+test.error <- calc_error_rate(pred.knn.test, test.Y$candidate)
+# adding to records
+record.pca[4,1] <- train.error
+record.pca[4,2] <- test.error
+```
+
+The best knn parameter is 13, not 48 anymore.
+
+* SVM on PCA
+
+```{r}
+library(e1071)
+svmfit = svm(candidate ~ .,data = election.pca.tr,kernel ="radial",cost = 1)
+svmpred = predict(svmfit,newdata =test.X)
+table(data = test.Y$candidate,svmpred)
+```
+
+```{r}
+# training errors
+pred.svm.train <-  predict(svmfit,newdata =train.X)
+train.error <- calc_error_rate(pred.svm.train, train.Y$candidate)
+# test errors
+pred.svm.test <- predict(svmfit,newdata =test.X)
+test.error <- calc_error_rate(pred.svm.test, test.Y$candidate)
+# adding to records
+record.pca[5,1] <- train.error
+record.pca[5,2] <- test.error
+```
+
+*###* Random forest
+
+```{r}
+rf.fit <- randomForest(formula =
+  droplevels(as.factor(candidate)) ~.,data = election.pca.tr)
+```
+
+```{r}
+# training errors
+forest.predict.train <- predict(rf.fit, train.X)
+label = droplevels(train.Y$candidate)
+train.error <- calc_error_rate(forest.predict.train, label)
+# test errors
+forest.predict.test <- predict(rf.fit, test.X)
+test.error <- calc_error_rate(forest.predict.test, label)
+record.pca[6,1] <- train.error
+record.pca[6,2] <- test.error
+```
+
+Now compare those 6 method performance on the train error and the test error:
+
+```{r}
+record.pca
+```
+
+Compare with the  original without pca:
+
+```{r}
+records
+```
+
+And their difference:
+
+```{r}
+record.pca-records
+```
+
+## Discussion
+
+We have following conclusions from this project:
+
+If we just compare the 6 methods on the dataset, the SVM method with radial kernel is the best, and the Lasso method has the smallest test error.
+
+This result shows that on the oringinal dataset, the lasso regression method has the best generalization flexibility, and the SVM is the best performance method.
+
+As lasso, logisitic and SVM are parametric methods, they have better performance than the deicision tree, and KNN method.
+
+Random forest method has 0 train error and a 28.8% test error, which means it has seriously overfit problem so we should not use it.
+
+On the original dataset, the KNN is much worse than the other methods on the performance.
+
+But when we change the data from the original to the first 10 Principle components, the KNN method had a huge improvement. Compare the PCA and non PCA result, logistic, lasso and SVM method all has a significant increase in both the train error and test error. The tree method is not affected that much, and the KNN method has a huge improvement.
+
+We think it's because for the first 10 PCs, it contains only part of the information from the data, so the parametric methods become not so outperforming compared to the non-parametric methods.
+
+It's interesting to observe a huge improvement in the KNN method when apply PCA. Also the best parameter also changed from 48 to 13. The error vs parameter curve also changed. That result deserves future investigation.
+
+
+## Appendix: R code
+
+```{r, echo=TRUE, eval=FALSE, ref.label=knitr::all_labels()}
+```

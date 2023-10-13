@@ -1,0 +1,449 @@
+---
+title: "PSTAT 175 Final Project"
+author: "Yuxi Sun"
+date: 12/18/2020
+output: pdf_document
+---
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE)
+```
+
+# Abstract
+
+In this project, we use the K-M estimation, cox ph model, and time dependent cox ph model to analysis the nwtco from the survival package. Our question is: is age, histology, and stage affect the survival rate of the patients? Based on our analysis: we conclude that the stage 2, 3, 4 patients have a higher hazard rate, and the baseline hazard function of UM histology is significant higher than the FM group. The age conclusion is tricky: though in histology FM group, age has a positive effect on the relapse (which is coincidence to the common sense), but in the UM group in the time 0-160, the age has a negative effect on the relapse, which is opposite to the common sense. Also we observe when time move over 160, the age effect in the UM group disappear.
+
+
+
+
+
+# Data source and research question
+
+The data set was from survival package called nwtco, this data set is collected from the
+National Wilm’s Tumor Study. It uses Tumor histology to predict survival rate, but prediction is stronger
+with central lab histology than with the local institution determination.
+
+The variables include:
+
+seqno: id number
+
+instit: Histology from local institution or centre lab (1 or 2)
+
+histol: Patients whose tumours are composed of one of the rare cell types knowncollectively as 'unfavourable histology' (UH) are much more likely to relapse and die thanare patients with tumours of 'favourable histology' (FH) (Beckwith and Palmer, 1978)
+
+stage: Disease stage (1-4)
+
+study: study (3 or 4) from the third and fourth clinical trials of the National Wilms Tumor Study Group (NWTSG) (D'Angio et al., 1989;Green et al., 1998)
+
+rel: indicator for relapse (0 or 1)
+
+edrel: time to relapse (day)
+
+age: age in month
+
+in.subcohort: Included in the subcohort for the example in the paper (T or F)
+
+This data was first included in the paper:
+
+NE Breslow and N Chatterjee (1999), Design and analysis of two-phase studies with binary outcome applied
+to Wilms tumour prognosis. Applied Statistics 48, 457–68.
+
+In our analysis, we treat stage, age and histol as 3 important covariates for the survival probability. edrel is the response time. Instit 1 stands for local institution and 2 stands for center lab. The data from R is not well informed so we first need to prepare the data:
+
+```{r}
+library(KMsurv)
+library(survival)
+library(tidyverse)
+library(survminer)
+## Create factors
+nwtco_prepared <- within(nwtco, {
+    instit <- factor(instit, labels = c("local", "center"))
+    histol <- factor(histol, labels = c("FH","UH"))
+    stage  <- factor(stage,  labels = c("I","II","III","IV"))
+    age    <- age / 12 # Age in years
+ })
+
+## Check
+head(nwtco_prepared)
+```
+
+```{r}
+summary(nwtco_prepared)
+```
+
+The paper has told us 'unfavourable histology' (UH) are much more likely to relapse and die thanare patients with tumours of 'favourable histology' (FH). And by common sense, the larger the stage is, the more likely to relapse and die. Also we would guess the age will have a positive influence on the relapse probability.
+
+# Kaplan-Meier estimation
+
+```{r}
+
+```
+
+
+
+To visualize our data, we use the original Kaplan-Meier estimator. It is a niave but useful approach to get the first hand impression of our dataset. For different category variables, we could calculate their K-M estimator separately to compare the survival function between different groups. The confidence interval is derived from the greenwood formula:
+$$Var(\hat S_t) = \hat S_t^2 \sum_{t_i\leq t} \frac{d_i}{n_i(n_i-d_i)}$$
+
+For each of the group, we will perform a log-rank test to get the p-value to test whether the two groups are different in KM-estimator.
+
+* K-M estimator and 95% confidence interval from greenwood formula. Total data:
+
+```{r}
+KM_fit <- survfit(Surv(edrel, rel) ~ 1, data = nwtco_prepared)
+plot(KM_fit, xlab = "Time to Relapse (days)", ylab = "Survival Probability", ylim = c(0.8,1),
+    main = "Kaplan-Meier Estimate of S(t)")
+```
+
+* Data partitioned by histol
+
+```{r,fig.height=7}
+ggsurvplot(survfit(Surv(edrel, rel) ~ histol,
+                   data = nwtco_prepared),
+           conf.int=TRUE,risk.table=TRUE, ylim = c(0.4,1),
+           legend.title="Histology",  
+           palette=c("dodgerblue2", "orchid2"), 
+           title="Kaplan-Meier Curve for relapse time", 
+           risk.table.height=.30)
+```
+
+From Kaplan-Meier estimator we could see that there is a huge difference the histology group FH and UH. It's very obvious that the histology UH has a larger fatality rate. Then we use the log log plot to check the proportional hazard assumption used in Cox model:
+
+```{r}
+# *log log plot*
+plot(survfit(Surv(edrel, rel) ~ histol,
+                   data = nwtco_prepared),
+     col=c("black", "red"), fun="cloglog")
+title("loglogplot for histol")
+```
+
+The log log plot shows the proportional assumption is not satisfied in the beginning, but after some time, it seems really proportional. We can also perform log rank test to test whether there is a significant difference between those 2 K-M curves:
+
+```{r}
+survdiff(Surv(edrel, rel) ~ histol,
+                   data = nwtco_prepared)
+```
+
+P-value is smaller than 0.05 so we can conclude that the histol variable is significant.
+
+
+* Data partitioned by stage
+
+```{r,fig.height=7}
+ggsurvplot(survfit(Surv(edrel, rel) ~ stage,
+                   data = nwtco_prepared),
+           conf.int=TRUE,risk.table=TRUE, ylim = c(0.7,1),
+           legend.title="stage",  
+           title="Kaplan-Meier Curve for relapse time", 
+           risk.table.height=.30)
+```
+
+From Kaplan-Meier estimator we could see that there is a huge difference the histology group FH and UH. It's very obvious that the histology UH has a larger fatality rate. Then we use the log log plot to check the proportional hazard assumption used in Cox model:
+
+```{r}
+# *log log plot*
+plot(survfit(Surv(edrel, rel) ~ stage,
+                   data = nwtco_prepared),
+     col=c(1,2,3,4), fun="cloglog")
+title("loglogplot for stages")
+```
+
+The log log plot shows the proportional assumption is violated by the stage 1 (black) and stage 2 (red) as there is an intersection. But after some time, the remaining events are proportional.
+
+Then is the log rank test:
+
+```{r}
+survdiff(Surv(edrel, rel) ~ stage,
+                   data = nwtco_prepared)
+```
+
+P-value is smaller than 0.05 so we can conclude that the stage variable is significant.
+
+* Study
+
+```{r,fig.height=7}
+ggsurvplot(survfit(Surv(edrel, rel) ~ study,
+                   data = nwtco_prepared),
+           conf.int=TRUE,risk.table=TRUE, ylim = c(0.5,1),
+           legend.title="stage",  
+           title="Kaplan-Meier Curve for relapse time", 
+           risk.table.height=.30)
+
+ggsurvplot(survfit(Surv(edrel, rel) ~ study+instit,
+                   data = nwtco_prepared),
+           conf.int=TRUE,risk.table=TRUE, ylim = c(0.5,1),
+           legend.title="stage",  
+           title="Kaplan-Meier Curve for relapse time", 
+           risk.table.height=.30)
+```
+
+From the KM estimator, the study itself has nearly no effect, and still no effect even we consider the interaction with institution.
+
+```{r}
+survdiff(Surv(edrel, rel) ~ study,
+                   data = nwtco_prepared)
+```
+
+The log rank P-value is 0.4 so the study effect is not significant.
+
+So generally study should not be included in the variable.
+
+* institution and histology
+
+```{r,fig.height=7}
+ggsurvplot(survfit(Surv(edrel, rel) ~ instit,
+                   data = nwtco_prepared),
+           conf.int=TRUE,risk.table=TRUE, ylim = c(0.5,1),
+           legend.title="stage",  
+           title="Kaplan-Meier Curve for relapse time", 
+           risk.table.height=.30)
+
+ggsurvplot(survfit(Surv(edrel, rel) ~ instit+histol,
+                   data = nwtco_prepared),
+           conf.int=TRUE,risk.table=TRUE, ylim = c(0.5,1),
+           legend.title="stage",  
+           title="Kaplan-Meier Curve for relapse time", 
+           risk.table.height=.30)
+```
+
+From the KM plot of institution we can observe there is a significant effect of institution. But when we plot the KM plot of 4 different groups from institution and histology, we observe that the significance from institution was mainly resulted from the difference of proportion of the significant variable, histology. But we also observe a difference in the survival function of different institution when the histology is labeled UH.
+
+* age for different groups
+
+```{r}
+nwtco1 = nwtco
+nwtco1$age = as.factor(ceiling((nwtco$age+25)/55))
+levels(nwtco1$age) = c("<30","30-85","85-140",">140")
+nwtco_gfit = survfit(Surv(edrel,rel)~age,data = nwtco1)
+plot(nwtco_gfit, col=c(1,2,3,4),
+conf.int = F,
+main="Kaplan Meier Curve for nwtco \n by Age",
+ylab = "survival probability",ylim = c(0.2,1),
+xlab = "Time(months)")
+legend("bottomright",legend = c("<30","30-85","85-140",">140"),col = c(1,2,3,4), lty = 1)
+```
+
+Apparently the age violates the proportional assumption.
+
+So from the visualization and the preliminary log-rank test, we conclude that the two category variable are really important to include in the cox model. But for the stage category variable, the cox proportional hazard assumption is not satisfied so we may need to stratify them. We may need to consider the interaction between institution and histology.
+
+The study category is not significant at all.
+
+# Cox proportional hazard model
+
+To build the Cox proportional hazard model on the time-constant covariates, we need to first determine the variables. We already have the insights from the K-M estimation, and we could select the final model by the smallest AIC. 
+
+## Use all study data:
+
+```{r}
+nwtco_prepared3 = nwtco_prepared[nwtco_prepared$study == 3,]
+nwtco_prepared4 = nwtco_prepared[nwtco_prepared$study == 4,]
+
+Coxfull = coxph(formula = Surv(edrel, rel) ~ 
+   instit + histol  + stage + age, 
+   data = nwtco_prepared)
+```
+
+Then we check the tests for proportional-hazards assumption. It could be obtained from *cox.zph()*, which computes a test for each covariates. The function tests proportional hazard assumption based on Schoenfeld residuals and test for the independence between residuals and time:
+
+```{r}
+check = cox.zph(Coxfull, transform = "km")
+check
+```
+
+From the result we can see all of the variables are significantly dependent with time, thus violating the proportional hazard assumption. So actually this full data is not suitable for proportional model. 
+
+## Use study 3 or study 4 data:
+
+Study 3 data full model check:
+
+```{r}
+Coxfull = coxph(formula = Surv(edrel, rel) ~ 
+   instit + histol  + stage + age, 
+   data = nwtco_prepared3)
+check = cox.zph(Coxfull, transform = "km")
+check
+```
+
+Study 4 data full model check:
+
+```{r,fig.height=6}
+Coxfull = coxph(formula = Surv(edrel, rel) ~ 
+   instit + histol  + stage + age, 
+   data = nwtco_prepared4)
+check = cox.zph(Coxfull, transform = "km")
+check
+```
+
+We observe that in the study 4, the variable stage does not seems to violate the cox proportional hazard assumption. So we could try the proportional model on the study 4 data only. 
+
+We first exclude age from the proportional part. Given that the age is significant, we should stratify the age as below:
+
+```{r}
+nwtco_prepared4$age = cut(nwtco_prepared4$age,c(0,3,6,10,Inf))
+```
+
+and we fit the cox model with stratified age and test the residual with the proportional assumption again:
+
+```{r,fig.height=6}
+Coxfull = coxph(formula = Surv(edrel, rel) ~ 
+   instit + histol + strata(age) + stage , 
+   data = nwtco_prepared4)
+check = cox.zph(Coxfull, transform = "km")
+check
+```
+
+The remaining predictors has histol is still significant dependent, so we stratify the variable histol, fit the third model and test the assumption again:
+
+```{r}
+Coxfit = coxph(formula = Surv(edrel, rel) ~ 
+   instit + strata(histol) + strata(age) + stage, 
+   data = nwtco_prepared4)
+check = cox.zph(Coxfit, transform = "km")
+check
+```
+
+We could also plot the Schoenfeld residuals here:
+
+```{r,fig.height=6}
+ggcoxzph(check)
+```
+
+Now we observe all of the p values are really high, and the horizon line is within the 95% CI of the confidence interval, so there is no evidence the proportional assumption is violated. So our model is summary as below:
+
+```{r}
+summary(Coxfit)
+```
+
+## *Hazard ratios and C.I.*
+
+Now we use the *ggforest()* function to visualize the hazard ratio and their confidence interval for each covariate obtained from the fitted model summary:
+
+```{r,fig.height = 5}
+attr(Coxfit$terms,"dataClasses") = attr(Coxfit$terms,"dataClasses")[c(-3,-4)]
+ggforest(Coxfit,data = nwtco_prepared4)
+```
+
+For the information in the hazard ratio chart above, we know that hazard ratio of all stages are significant. Stage 2 is centered at 2.3 with the 95% CI 1.68-3.3, stage 3 is centered at 1.7 with 95% CI 1.19-2.5, stage 4 is centered at 2.8 with 95% CI 1.92-4.2. It is interesting that the stage 2 has higher fatality rate then the stage 3. On the other hand, the institution is not significant, even the mean hazard ratio from center is higher.
+
+So with all of the 3 stages p value  < 0.05, we can conclude that the stage effect is significant for the relapse. Stage 2, 3, 4 patients are more likely to relapse.
+
+
+## *Baseline Hazard Rates for strata histology*
+
+Though we don't have any coefficients for the covariates histology, we can plot the base hazard rate obtained by our cox ph model to illustrate the histology influence.
+
+```{r}
+df = basehaz(Coxfit)
+ggplot(df, aes(x = time, y = hazard, color = strata)) + geom_line(size = 1)+ labs(title = "plot of base hazard rates", x = "Time", y = "hazard rates") + scale_colour_discrete(name  ="strata") 
+```
+
+From the plot above, we clearly see that group with histology UH has higher baseline hazard rates than the FH group (most of the UH curves are lower than the FH curves. The UH, (10,Inf] is lower than FH, (10,Inf) may because of the small observations).
+
+As a result, the UH histology group. will suffer a much higher fatality rate compared than the FH histology group.
+
+We can't observe a clear age relationship between the UH group, but it seems clear that in FH group, as the age increase, the baseline hazard rate increase.
+
+Though we are interested in the interaction of institution and histology, but as histology is stratified, we can't model the interaction from the cox ph model.
+
+# Step Functions for Time-Varying Coefficients in Cox model
+
+The stratified Cox model can also be used in settings in which a continuous covariate does not satisfy the proportional hazards assumption, and we want to fit instead a Cox model with a time-varying coefficient.
+
+As we analyzed in the last part, in the histology with FH group, the age seems to have a significant proportional effect. So now we only consider those from UH group.
+
+```{r}
+nwtco_prepared11 = nwtco_prepared[nwtco_prepared$histol == "FH",]
+```
+
+
+```{r}
+fit <- coxph(Surv(edrel, rel) ~ 
+   age + stage, 
+   data = nwtco_prepared11)
+cox.zph(fit)
+
+par(mfrow = c(1,2))
+plot(cox.zph(fit), var = 1)
+abline(h = coef(fit)[1], lty = 2, col = "red")
+
+
+plot(cox.zph(fit), var = 2)
+abline(h = coef(fit)[2], lty = 2, col = "red")
+```
+
+From the test and the plot we could observe that the covariate stage is time-dependent. But it seems the stage had a change in time 290. We make 2 different betas on those 2 intervals 0-290 and 290-inf: 
+
+```{r}
+nwtco_prepared111 <- survSplit(Surv(edrel, rel) ~ 
+   age + stage, data = nwtco_prepared11,
+                   cut = c(290), episode = "time_group")
+```
+
+```{r}
+fit_tv_coef <- coxph(Surv(tstart,edrel, rel) ~
+                       age:strata(time_group) + 
+                       stage:strata(time_group),
+                     data = nwtco_prepared111)
+summary(fit_tv_coef)
+```
+
+We obtain 2coefficients for each previous estimate for the 2 different time stratas. From the result:
+
+* The estimation of coefficient of age is clearly significant different in the two different time period. In interval 0-290 the estimate is 0.07936 and in interval 290-inf is 0.17081. The sd for both estimates are smaller than 0.03, so the difference between those 2 predictors are bigger than 2 times sd, which is very significant. So even though the age effect is time dependent, we can use this model to handle it.
+
+Another interesting result comes from when we model the similar model on the age for the UH histology group:
+
+```{r}
+nwtco_prepared12 = nwtco_prepared[nwtco_prepared$histol == "UH",]
+fit <- coxph(Surv(edrel, rel) ~ 
+   age ,
+   data = nwtco_prepared12)
+cox.zph(fit)
+
+plot(cox.zph(fit), var = 1)
+abline(h = coef(fit)[1], lty = 2, col = "red")
+```
+
+As the residual had a change near time 160, we use the 2 different interval 0-160 and 160-inf and fit the time dependent model:
+
+```{r}
+nwtco_prepared112 <- survSplit(Surv(edrel, rel) ~ 
+   age , data = nwtco_prepared12,
+                   cut = c(160), episode = "time_group")
+```
+
+```{r}
+fit_tv_coef <- coxph(Surv(tstart,edrel, rel) ~
+                       age:strata(time_group) ,
+                     data = nwtco_prepared112)
+summary(fit_tv_coef)
+```
+
+Now we can observe the effect of age in the interval 0-160 is significant negative for the relapse. It is really interesting that in the UM group and in the early time, the age has a totally different effect with the common sense.
+
+# Citation
+
+1. NE Breslow and N Chatterjee (1999), Design and analysis of two-phase studies with binary outcome applied
+to Wilms tumour prognosis. Applied Statistics 48, 457–68.
+
+
+2. Time dependent cox model 
+
+http://www.drizopoulos.com/courses/emc/ep03_%20survival%20analysis%20in%20r%20companion#step-functions-for-time-varying-coefficients
+
+# *Appendix: Rcode*
+
+```{r, echo=TRUE, eval=FALSE, ref.label=knitr::all_labels()}
+```
+
+
+
+
+
+
+
+
+
+
+
+
