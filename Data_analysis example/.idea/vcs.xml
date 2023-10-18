@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="$PROJECT_DIR$/LLM_JW/Local-Code-Interpreter" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/LLM_JW/Mouse/TubeViT" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/LLM_JW/new-webapp-backend" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/LLM_JW/webapp" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/private.sta141b" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/sta141b" vcs="Git" />
+  </component>
+</project>
