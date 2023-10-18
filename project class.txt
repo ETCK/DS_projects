@@ -1,0 +1,24 @@
+## Regression
+- **Linear regression**
+- **Generalized linear regression**
+- **Regression model selection**
+
+## ANOVA
+- **Basic ANOVA**
+- **2-way ANOVA**
+- **Experiment design**
+
+## Dimension Reduction
+- **PCA (Principal Component Analysis)**
+- **t-SNE (t-Distributed Stochastic Neighbor Embedding)**
+
+## Basic Tests
+- **T-test**
+- **Chi-square test**
+- **Non-parametric test**
+- **Bootstrap**
+
+## Survival Analysis
+- **Kaplan-Meier estimator**
+- **Cox Proportional Hazards model**
+- **Accelerated Failure Time models**
