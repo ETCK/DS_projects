@@ -1,0 +1,32 @@
+Step 1: Understanding and Preparing the Data
+Load the dataset and conduct an exploratory analysis, understanding the distribution and relationship between variables.
+Visualize the data through different plots to understand trends, patterns, and potential outliers or anomalies.
+Prepare the data for modeling, handling missing values appropriately, and possibly creating variable categories if needed.
+
+Step 2: Building the Initial Poisson Regression Model
+Construct a Poisson regression model with all relevant predictors, considering the nature of the response variable (count data).
+Analyze the model summary to identify significant variables and understand the model's initial performance.
+
+Step 3: Refining the Model - Selection Criteria and Diagnostics
+Perform stepwise regression procedures using criteria like AIC and BIC for model selection:
+AIC (Akaike Information Criterion) is used for model selection, with a preference for lower values indicating a better model fit relative to others. It's beneficial in scenarios where prediction accuracy is paramount, even at the expense of simplicity.
+BIC (Bayesian Information Criterion) also aims for lower values, favoring simpler models compared to AIC, especially in cases of overfitting. It is more conservative than AIC.
+If there's a discrepancy between AIC and BIC selections, conduct a likelihood ratio test to decide on the more appropriate model. A lower p-value (typically below 0.05) suggests rejecting the simpler model for the one with more predictors.
+
+
+Step 4: Diagnostics and Influential Observations
+Check residual plots to identify any deviations from randomness, indicating model inadequacies.
+Investigate potential overdispersion (mean differing significantly from variance), considering quasi-Poisson or negative binomial models if present.
+Analyze leverage points and influential observations using metrics like Cook's distance. High values indicate observations that are unduly influencing the model's performance.
+
+Step 5: Model Interpretation and Predictions
+Interpret the final model coefficients in terms of rate ratios, explaining the practical significance of these figures.
+Discuss the model's predictive capabilities, considering its application in practical scenarios.
+
+Step 6: Conclusions and Recommendations
+Summarize the analysis findings, highlighting the key predictors and their impact on the response variable.
+Acknowledge the study's limitations, suggesting areas for future research or alternative methods for consideration.
+Provide clear, evidence-based recommendations following the analysis results.
+
+Step 7: Appendix
+Compile all relevant tables, figures, and code scripts used throughout the analysis for reference and reproducibility.
